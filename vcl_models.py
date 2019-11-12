@@ -15,7 +15,7 @@ def truncated_normal(size, stddev=1, mean=0):
     lower, upper= -2 * sigma, 2 * sigma
     X = truncnorm(
         (lower - mu) / sigma, (upper + mu) / sigma, loc=mu, scale=sigma)
-    X_tensor = torch.Tensor(data = X.rvs(size)).to(device = device)
+    X_tensor = torch.Tensor(data = X.rvs(size))
     return X_tensor
 
 class BayesianLinear(nn.Module):
@@ -295,6 +295,7 @@ class MFVINNWrapper():
 
     def create_head(self):
         self.mfvi_net.create_head()
+        sefl.mfvi_net = self.mfvi_net.to(self.device)
         return
 
     def update_prior(self):
