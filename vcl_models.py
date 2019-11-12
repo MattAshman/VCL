@@ -35,8 +35,9 @@ class BayesianLinear(nn.Module):
         bias_mu_prior: Mean of prior distribution over biases.
         bias_var_prior: Variance of prior distribution over biases.
     """
-    def __init__(self, dim_in, dim_out, prev_means=None):
+    def __init__(self, dim_in, dim_out, device, prev_means=None):
         super().__init__()
+        self.device = device
         self.dim_in = dim_in
         self.dim_out = dim_out
 
@@ -49,20 +50,24 @@ class BayesianLinear(nn.Module):
                                                       stddev=0.1))
         self.bias_log_var = nn.Parameter(-6 * torch.ones([dim_out]))
 
-        # Initialise prior values for means and variance
-        self.weight_mu_prior = torch.zeros([dim_in, dim_out])
-        self.bias_mu_prior = torch.zeros([dim_out])
+        # Initialise prior values for means and variance. Register_buffer
+        # enabled .to(device) to work.
+        self.register_buffer('weight_mu_prior', torch.zeros([dim_in, dim_out]))
+        self.register_buffer('bias_mu_prior', torch.zeros([dim_out]))
 
-        self.weight_var_prior = torch.ones([dim_in, dim_out])
-        self.bias_var_prior = torch.ones([dim_out])
+        self.register_buffer('weight_var_prior', torch.ones([dim_in, dim_out]))
+        self.register_buffer('bias_var_prior', torch.ones([dim_out]))
 
     def forward(self, input):
         # Sample weight epsilon and bias epsilon. This is the reparameterisation
         # trick, and allows gradient descent to be performed.
+        # These aren't on same device...
         weight_eps = torch.normal(torch.zeros([self.dim_in, self.dim_out]),
-                                  torch.ones([self.dim_in, self.dim_out]))
+                                  torch.ones([self.dim_in, self.dim_out])
+                                  ).to(self.device)
         bias_eps = torch.normal(torch.zeros(self.dim_out),
-                                torch.ones(self.dim_out))
+                                torch.ones(self.dim_out)
+                                ).to(self.device)
 
         # Generate weight and bias samples.
         # Note: std = exp(0.5 * log(var))
@@ -84,7 +89,7 @@ class BayesianLinear(nn.Module):
         const_term = -0.5 * self.dim_in * self.dim_out
 
         # Pretty much copied from TensorFlow implementation
-        log_std_diff = 0.5 * torch.sum(np.log(self.weight_var_prior) -
+        log_std_diff = 0.5 * torch.sum(torch.log(self.weight_var_prior) -
                                        self.weight_log_var)
         mu_diff_term = 0.5 * torch.sum((torch.exp(self.weight_log_var) +
                                        (self.weight_mu_prior - self.weight_mu)
@@ -97,8 +102,10 @@ class BayesianLinear(nn.Module):
 
 class MFVINN(nn.Module):
     def __init__(self, dim_in, dim_out, hidden_size, training_size,
-                 n_train_samples=10):
+                 device, n_train_samples=10):
         super().__init__()
+
+        self.device = device
 
         self.dim_in = dim_in
         self.dim_out = dim_out
@@ -124,7 +131,7 @@ class MFVINN(nn.Module):
             din = self.size[i]
             dout = self.size[i+1]
 
-            layer = BayesianLinear(din, dout)
+            layer = BayesianLinear(din, dout, device=self.device)
 
             self.layers.append(layer)
 
@@ -181,12 +188,20 @@ class MFVINN(nn.Module):
 
         return kl
 
+    def predict(self, inputs, task_idx):
+        # Need to modify to include multiple samples
+        preds_sample = self.forward(inputs, task_idx)
+        preds_sample = F.softmax(preds_sample)
+
+        return preds_sample
+
+
     def create_head(self):
         # Create a new last layer and append to the end of last_layers
         # ModuleList.
         din = self.size[-2]
         dout = self.size[-1]
-        layer = BayesianLinear(din, dout)
+        layer = BayesianLinear(din, dout, device=self.device).to(self.device)
 
         self.last_layers.append(layer)
 
@@ -229,12 +244,12 @@ class MFVINNWrapper():
                  device):
 
         # Set device for MFVINNWrapper
-        pdb.set_trace()
         self.device = device
 
         # Initialise MFVINN object, and move to device
-        self.mfvi_net = MFVINN(dim_in, dim_out, hidden_size, training_size
-                               ).to(self.device)
+        self.mfvi_net = MFVINN(dim_in, dim_out, hidden_size, training_size,
+                               device).to(device)
+
 
         # Initialise ADAM optimiser.
         self.optimizer = optim.Adam(self.mfvi_net.parameters(), lr=learn_rate)
@@ -294,9 +309,25 @@ class MFVINNWrapper():
 
         return losses
 
+    def get_accuracies(self, x_testset, y_testset):
+        accuracies = []
+        for idx, (x_test, y_test) in enumerate(zip(x_testset, y_testset)):
+            x = torch.Tensor(x_test).to(self.device)
+
+            # Sample predictions
+            predictions = self.mfvi_net.predict(x, task_idx)
+            predicted_labels = predictions.argmax(1)
+
+            # Calculate accuracy
+            accuracy = sum([1 for i in range(len(y_test)) if
+                                            (y_test[i] == predicted_labels[i])])
+            accuracy /= len(y_test)
+            accuracies.append(accuracy)
+
+        return accuracies
+
     def create_head(self):
         self.mfvi_net.create_head()
-        sefl.mfvi_net = self.mfvi_net.to(self.device)
         return
 
     def update_prior(self):
