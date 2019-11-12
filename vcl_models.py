@@ -16,6 +16,7 @@ def truncated_normal(size, stddev=1, mean=0):
     X = truncnorm(
         (lower - mu) / sigma, (upper + mu) / sigma, loc=mu, scale=sigma)
     X_tensor = torch.Tensor(data = X.rvs(size))
+    pdb.set_trace()
     return X_tensor
 
 class BayesianLinear(nn.Module):
@@ -229,6 +230,7 @@ class MFVINNWrapper():
                  device):
 
         # Set device for MFVINNWrapper
+        pdb.set_trace()
         self.device = device
 
         # Initialise MFVINN object, and move to device
